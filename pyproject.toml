@@ -1,0 +1,17 @@
+[project]
+name = "real-work"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "aiofiles>=23.0.0",
+    "asyncio-mqtt>=0.13.0",
+    "docker>=6.0.0",
+    "openai>=1.0.0",
+    "pydantic>=2.0.0",
+    "pytest>=7.0.0",
+    "python-dotenv>=1.0.0",
+    "rich>=13.0.0",
+    "typer>=0.9.0",
+]

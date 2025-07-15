@@ -15,7 +15,6 @@ Currently, it is implemented to simulate software development workflows.
 - **State Persistence**: File system snapshots for environment state management
 - **Unit Test Evaluation**: Automated testing and scoring of agent outputs
 - **Dynamic Rollout Management**: Plugins can modify rollout behavior based on performance
-- **Claude 3.5 Sonnet**: Uses state-of-the-art Claude 3.5 Sonnet model by default
 
 ## Installation
 

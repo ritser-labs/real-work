@@ -18,6 +18,13 @@ Currently, it is implemented to simulate software development workflows.
 
 ## Installation
 
+### Prerequisites
+
+- **Docker**: This framework requires Docker to be installed and running on your system. Download and install Docker from [https://www.docker.com/get-started](https://www.docker.com/get-started)
+- **Python 3.8+**: Required for running the framework
+
+### Installation Steps
+
 1. Clone the repository:
 ```bash
 git clone <repository-url>
@@ -30,7 +37,11 @@ pip install uv
 uv sync
 ```
 
-3. Ensure Docker is installed and running on your system.
+3. Verify Docker is installed and running:
+```bash
+docker --version
+docker run hello-world
+```
 
 4. Set up your OpenRouter API key:
 ```bash

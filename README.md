@@ -1,6 +1,8 @@
-# LLM RL Framework
+# Real Work by Ritser Labs
 
-An extensible, modular framework for reinforcement learning with LLM agents that work in Docker environments to write code and get evaluated by unit tests.
+An extensible, modular framework for reinforcement learning with LLM agents that work in Docker environments to simulate realistic workflows.
+
+Currently, it is implemented to simulate software development workflows.
 
 ## Features
 

@@ -28,7 +28,7 @@ cd llm-rl-framework
 2. Install dependencies:
 ```bash
 pip install uv
-uv install
+uv sync
 ```
 
 3. Ensure Docker is installed and running on your system.

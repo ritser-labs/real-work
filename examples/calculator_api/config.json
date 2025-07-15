@@ -1,0 +1,35 @@
+{
+  "environments": [
+    {
+      "id": "calculator_api",
+      "docker_image": "python:3.9-slim",
+      "init_commands": [
+        "pip install flask pytest requests",
+        "mkdir -p /workspace/tests",
+        "cd /workspace"
+      ],
+      "unit_tests": [
+        "cd /workspace && python -m pytest tests/ -v",
+        "cd /workspace && python -c \"import requests; r = requests.get('http://localhost:5000/health'); assert r.status_code == 200\""
+      ],
+      "prompt": "Create a REST API for a calculator application with the following requirements:\n\n1. Create a Flask application that provides a calculator API\n2. The API should support basic operations: addition, subtraction, multiplication, division\n3. Endpoints should be:\n   - POST /calculate with JSON body: {\"operation\": \"add\", \"numbers\": [1, 2, 3]}\n   - GET /health for health check\n4. Handle errors gracefully (division by zero, invalid operations, etc.)\n5. Return results in JSON format: {\"result\": 6}\n6. The application should run on port 5000\n7. Include proper error handling and status codes\n\nThe unit tests will verify:\n- Basic arithmetic operations work correctly\n- Error handling for invalid inputs\n- Health check endpoint\n- API returns proper JSON responses\n\nStart the Flask application after implementing it so the tests can run against it.",
+      "working_directory": "/workspace",
+      "environment_variables": {
+        "PYTHONPATH": "/workspace",
+        "FLASK_ENV": "development"
+      }
+    }
+  ],
+  "rollout_config": {
+    "max_parallel_rollouts": 2,
+    "trajectory_output_path": "trajectories",
+    "enable_plugins": true
+  },
+  "timeout_config": {
+    "global_timeout": 1800,
+    "command_timeout": 300,
+    "test_timeout": 120
+  },
+  "template_prompt": "You are an expert software engineer working in a Docker container environment. You have access to shell commands, can read and write files, and should implement the requested functionality step by step.\n\nYour environment has:\n- Shell access with common Unix tools\n- Python 3.9 with pip for package management\n- Access to install packages as needed\n- Working directory at /workspace\n\nAlways:\n1. Think through the problem step by step\n2. Implement clean, well-structured code\n3. Test your implementation as you go\n4. Handle errors gracefully\n5. Use proper logging and documentation\n\nWhen you complete the task, use <done> to indicate completion.",
+  "plugins": []
+} 

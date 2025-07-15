@@ -27,7 +27,8 @@ cd llm-rl-framework
 
 2. Install dependencies:
 ```bash
-pip install -r requirements.txt
+pip install uv
+uv install
 ```
 
 3. Ensure Docker is installed and running on your system.

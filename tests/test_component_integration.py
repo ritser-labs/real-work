@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 """
-End-to-end test for the LLM RL Framework
+Component Integration Test for the LLM RL Framework
 
-This test validates the complete framework functionality including:
+This test validates individual framework components and their integration including:
 - Configuration loading without llm_config
 - Command-line LLM configuration
-- Environment setup and execution
-- Trajectory generation and saving
-- Test execution and result collection
+- Component initialization and setup
+- Trajectory manager functionality
+- Mock-based component interaction testing
+
+Note: For real end-to-end testing, see test_real_e2e.py
 """
 
 import asyncio
@@ -29,8 +31,8 @@ from src.environments.environment import Environment
 from src.agents.llm_agent import LLMAgent
 
 
-class TestE2EFramework:
-    """End-to-end test suite for the framework"""
+class TestComponentIntegration:
+    """Component integration test suite for the framework"""
     
     def __init__(self):
         self.temp_dir = None
@@ -346,7 +348,7 @@ class TestE2EFramework:
     
     async def run_all_tests(self):
         """Run all end-to-end tests"""
-        print("🚀 Starting End-to-End Framework Tests\n")
+        print("🚀 Starting Component Integration Tests\n")
         
         tests = [
             self.test_config_loading_without_llm_config,
@@ -373,7 +375,7 @@ class TestE2EFramework:
             print()  # Add spacing between tests
         
         print("=" * 50)
-        print(f"End-to-End Test Results:")
+        print(f"Component Integration Test Results:")
         print(f"✅ Passed: {passed}")
         print(f"❌ Failed: {failed}")
         print(f"📊 Success Rate: {passed/(passed+failed)*100:.1f}%")
@@ -382,12 +384,12 @@ class TestE2EFramework:
 
 
 async def main():
-    """Run the end-to-end tests"""
-    test_suite = TestE2EFramework()
+    """Run the component integration tests"""
+    test_suite = TestComponentIntegration()
     success = await test_suite.run_all_tests()
     
     if success:
-        print("\n🎉 All end-to-end tests passed!")
+        print("\n🎉 All component integration tests passed!")
         sys.exit(0)
     else:
         print("\n💥 Some tests failed!")

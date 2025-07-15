@@ -63,7 +63,7 @@ Or set it directly in the configuration file.
 
 2. **Run the framework**:
 ```bash
-python main.py examples/calculator_api/config.json \
+uv run python main.py examples/calculator_api/config.json \
   --llm-api-key your-api-key-here \
   --llm-model anthropic/claude-4-sonnet \
   --llm-base-url https://openrouter.ai/api/v1
@@ -182,7 +182,7 @@ The framework includes a complete example that demonstrates building a calculato
 
 ```bash
 # Run the calculator API example
-python main.py examples/calculator_api/config.json --output calculator_results.json
+uv run python main.py examples/calculator_api/config.json --output calculator_results.json
 
 # View results
 cat calculator_results.json
@@ -321,7 +321,7 @@ The framework provides comprehensive performance monitoring:
 Run with debug logging for detailed information:
 
 ```bash
-python main.py config.json --log-level DEBUG
+uv run python main.py config.json --log-level DEBUG
 ```
 
 ### Configuration Validation
@@ -329,7 +329,7 @@ python main.py config.json --log-level DEBUG
 Validate your configuration without running:
 
 ```bash
-python main.py config.json --dry-run
+uv run python main.py config.json --dry-run
 ```
 
 ## Contributing

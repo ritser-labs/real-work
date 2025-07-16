@@ -1,8 +1,10 @@
 # Real Work by Ritser Labs
-
 An extensible, modular framework for reinforcement learning with LLM agents that work in Docker environments to simulate realistic workflows.
 
 Currently, it is implemented to simulate software development workflows.
+
+
+![Screenshot of Real Work](/docs/screenshot.png)
 
 ## Features
 
@@ -323,22 +325,6 @@ The framework provides comprehensive performance monitoring:
 2. Implement custom scoring logic
 3. Register the plugin in your configuration
 
-## Troubleshooting
-
-### Common Issues
-
-1. **Docker not found**: Ensure Docker is installed and running
-2. **API key issues**: Check your OpenAI API key configuration
-3. **Permission errors**: Ensure proper file permissions for workspace
-4. **Timeout errors**: Adjust timeout configuration for your use case
-
-### Debug Mode
-
-Run with debug logging for detailed information:
-
-```bash
-uv run python main.py config.json --log-level DEBUG
-```
 
 ### Configuration Validation
 
@@ -367,7 +353,3 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 - [ ] Support for multi-agent environments
 - [ ] Advanced trajectory analysis tools
 - [ ] Containerized deployment options
-
-## Support
-
-For questions and support, please open an issue on the GitHub repository.

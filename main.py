@@ -10,8 +10,10 @@ import argparse
 import json
 import logging
 import sys
+import signal
+import atexit
 from pathlib import Path
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 import traceback
 
 from src.core.config import FrameworkConfig, LLMConfig, EpisodeControlConfig
@@ -20,6 +22,85 @@ from rich.console import Console
 from rich.logging import RichHandler
 from rich.table import Table
 from rich.panel import Panel
+
+# Global variables for cleanup
+rollout_manager: Optional[RolloutManager] = None
+console: Optional[Console] = None
+cleanup_completed = False
+
+
+def signal_handler(signum, frame):
+    """Handle termination signals"""
+    global rollout_manager, console, cleanup_completed
+    
+    if not cleanup_completed:
+        if console:
+            console.print(f"\n[yellow]Received signal {signum}, cleaning up...[/yellow]")
+        
+        # Try to schedule cleanup if event loop is running
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                asyncio.create_task(cleanup_on_exit())
+            else:
+                # If loop is not running, run cleanup directly
+                loop.run_until_complete(cleanup_on_exit())
+        except Exception as e:
+            if console:
+                console.print(f"[red]Error during signal cleanup: {e}[/red]")
+        
+        # Exit after cleanup
+        sys.exit(0)
+
+
+async def cleanup_on_exit():
+    """Perform cleanup when exiting"""
+    global rollout_manager, cleanup_completed
+    
+    if cleanup_completed or not rollout_manager:
+        return
+    
+    try:
+        if console:
+            console.print("[yellow]Cleaning up Docker containers and resources...[/yellow]")
+        
+        await rollout_manager.cleanup()
+        cleanup_completed = True
+        
+        if console:
+            console.print("[green]Cleanup completed successfully[/green]")
+            
+    except Exception as e:
+        if console:
+            console.print(f"[red]Error during cleanup: {e}[/red]")
+        cleanup_completed = True
+
+
+def setup_signal_handlers():
+    """Set up signal handlers for graceful termination"""
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+
+
+def setup_atexit_handler():
+    """Set up atexit handler for cleanup"""
+    def atexit_cleanup():
+        if not cleanup_completed and rollout_manager:
+            # Try to run cleanup synchronously if asyncio is not running
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    # Schedule cleanup if loop is running
+                    loop.create_task(cleanup_on_exit())
+                else:
+                    # Run cleanup directly if loop is not running
+                    loop.run_until_complete(cleanup_on_exit())
+            except Exception:
+                # If all else fails, just log the error
+                if console:
+                    console.print("[red]Failed to cleanup on exit[/red]")
+    
+    atexit.register(atexit_cleanup)
 
 
 def setup_logging(log_level: str = "INFO") -> None:
@@ -170,6 +251,8 @@ def display_results_summary(results: list, rollout_manager: RolloutManager, cons
 
 async def main():
     """Main function"""
+    global rollout_manager, console, cleanup_completed
+    
     parser = argparse.ArgumentParser(description="LLM RL Framework")
     parser.add_argument("config", help="Path to configuration file")
     parser.add_argument("--log-level", default="INFO", 
@@ -299,17 +382,47 @@ async def main():
         
         finally:
             # Cleanup
-            await rollout_manager.cleanup()
+            if not cleanup_completed:
+                await rollout_manager.cleanup()
+                cleanup_completed = True
     
     except KeyboardInterrupt:
         console.print("\n[yellow]Interrupted by user[/yellow]")
+        # Cleanup will be handled by signal handler
         sys.exit(1)
     except Exception as e:
         console.print(f"[red]Error: {e}[/red]")
         if args.log_level == "DEBUG":
             console.print(traceback.format_exc())
+        # Ensure cleanup happens even on error
+        if not cleanup_completed and rollout_manager:
+            try:
+                await rollout_manager.cleanup()
+                cleanup_completed = True
+            except Exception as cleanup_error:
+                console.print(f"[red]Error during cleanup: {cleanup_error}[/red]")
         sys.exit(1)
 
 
 if __name__ == "__main__":
-    asyncio.run(main()) 
+    # Set up signal handlers and atexit handler
+    setup_signal_handlers()
+    setup_atexit_handler()
+    
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        # This should be handled by signal handler, but just in case
+        if not cleanup_completed and rollout_manager:
+            try:
+                asyncio.run(cleanup_on_exit())
+            except Exception:
+                pass
+    except Exception as e:
+        # Ensure cleanup happens even on unexpected errors
+        if not cleanup_completed and rollout_manager:
+            try:
+                asyncio.run(cleanup_on_exit())
+            except Exception:
+                pass
+        raise 

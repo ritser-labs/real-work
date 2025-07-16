@@ -471,41 +471,85 @@ class Environment:
         """Clean up the environment"""
         try:
             if self.container:
-                # Reload container to get current state
+                container_id = self.container.id[:12] if self.container and hasattr(self.container, 'id') and self.container.id else "unknown"
+                
+                # Try to reload container to get current state
                 try:
                     if hasattr(self.container, 'reload'):
                         self.container.reload()
-                    
                     container_status = self.container.status
-                    
-                    # Only try to stop/remove if container is not already being removed
-                    container_id = self.container.id[:12] if self.container and hasattr(self.container, 'id') else "unknown"
-                    
-                    if container_status not in ['exited', 'dead']:
+                except Exception:
+                    # If we can't reload, assume it's still running
+                    container_status = "unknown"
+                
+                # Force stop the container if it's running
+                try:
+                    if container_status not in ['exited', 'dead', 'removing']:
                         self.logger.debug(f"Stopping container {container_id} (status: {container_status})")
-                        self.container.stop(timeout=5)
-                    
-                    # Try to remove the container
+                        self.container.stop(timeout=10)
+                except Exception as e:
+                    self.logger.debug(f"Error stopping container {container_id}: {e}")
+                
+                # Force remove the container
+                try:
                     self.logger.debug(f"Removing container {container_id}")
                     self.container.remove(force=True)
                     self.logger.info(f"Environment {self.config.id} cleaned up successfully")
-                    
                 except Exception as e:
-                    container_id = self.container.id[:12] if self.container and hasattr(self.container, 'id') else "unknown"
-                    # Check if it's a "container already being removed" error
-                    if "removal of container" in str(e) and "is already in progress" in str(e):
-                        self.logger.debug(f"Container {container_id} is already being removed")
-                    elif "No such container" in str(e):
-                        self.logger.debug(f"Container {container_id} no longer exists")
+                    # Check for specific error types
+                    error_str = str(e).lower()
+                    if any(phrase in error_str for phrase in [
+                        "removal of container", "is already in progress",
+                        "no such container", "container not found",
+                        "already being removed"
+                    ]):
+                        self.logger.debug(f"Container {container_id} already being removed or doesn't exist")
                     else:
-                        # For other errors, log them but don't fail
-                        self.logger.warning(f"Error during container cleanup: {e}")
+                        self.logger.warning(f"Error removing container {container_id}: {e}")
+                        
+                        # Try alternative cleanup method using docker CLI
+                        await self._cleanup_via_cli(container_id)
                 
         except Exception as e:
             self.logger.error(f"Error during cleanup: {e}")
         finally:
             # Always clear the container reference
             self.container = None
+    
+    async def _cleanup_via_cli(self, container_id: str) -> None:
+        """Clean up container using docker CLI as fallback"""
+        try:
+            import subprocess
+            import asyncio
+            
+            # Try to stop the container first
+            stop_result = await asyncio.create_subprocess_exec(
+                "docker", "stop", container_id,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            await stop_result.wait()
+            
+            # Then remove it
+            rm_result = await asyncio.create_subprocess_exec(
+                "docker", "rm", "-f", container_id,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            await rm_result.wait()
+            
+            if rm_result.returncode == 0:
+                self.logger.info(f"Container {container_id} removed via docker CLI")
+            else:
+                stderr = await rm_result.stderr.read() if rm_result.stderr else None
+                stderr_str = stderr.decode() if stderr else ""
+                if "No such container" in stderr_str:
+                    self.logger.debug(f"Container {container_id} already removed")
+                else:
+                    self.logger.debug(f"Docker CLI removal failed: {stderr_str}")
+                    
+        except Exception as e:
+            self.logger.debug(f"Docker CLI cleanup failed: {e}")
     
     def get_container_info(self) -> Dict[str, Any]:
         """Get information about the container"""

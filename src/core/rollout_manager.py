@@ -527,8 +527,53 @@ class RolloutManager:
     async def cleanup(self) -> None:
         """Cleanup resources"""
         try:
+            # Save trajectories first
             await self.trajectory_manager.save_all_trajectories()
+            
+            # Unload plugins
             await self.plugin_manager.unload_all_plugins()
+            
+            # Force cleanup any remaining Docker containers
+            await self._force_cleanup_containers()
+            
             self.logger.info("RolloutManager cleanup completed")
         except Exception as e:
-            self.logger.error(f"Error during cleanup: {e}") 
+            self.logger.error(f"Error during cleanup: {e}")
+    
+    async def _force_cleanup_containers(self) -> None:
+        """Force cleanup any remaining Docker containers that might be orphaned"""
+        try:
+            import subprocess
+            import docker
+            
+            # Get list of containers that might be from our framework
+            client = docker.from_env()
+            containers = client.containers.list(all=True)
+            
+            cleanup_count = 0
+            for container in containers:
+                try:
+                    # Check if this looks like one of our containers
+                    # Our containers typically have specific labels or names
+                    container_info = container.attrs
+                    labels = container_info.get('Config', {}).get('Labels', {})
+                    
+                    # Look for containers that might be orphaned from our framework
+                    # This is a best-effort cleanup
+                    if (container.status in ['running', 'created'] and 
+                        any(keyword in str(container_info).lower() for keyword in 
+                            ['workspace', 'tmp', 'python', 'tail -f /dev/null'])):
+                        
+                        self.logger.debug(f"Cleaning up potentially orphaned container: {container.id[:12]}")
+                        container.stop(timeout=5)
+                        container.remove(force=True)
+                        cleanup_count += 1
+                        
+                except Exception as e:
+                    self.logger.debug(f"Error cleaning up container {container.id[:12]}: {e}")
+            
+            if cleanup_count > 0:
+                self.logger.info(f"Cleaned up {cleanup_count} potentially orphaned containers")
+                
+        except Exception as e:
+            self.logger.debug(f"Error during force container cleanup: {e}") 

@@ -41,7 +41,6 @@ class LLMConfig(BaseModel):
     
     # Token usage tracking
     track_token_usage: bool = Field(default=True, description="Enable token usage tracking")
-    max_cost_per_episode: Optional[float] = Field(default=None, description="Maximum cost per episode in USD")
     warn_high_usage: bool = Field(default=True, description="Warn when token usage is high")
 
 

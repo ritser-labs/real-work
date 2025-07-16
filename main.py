@@ -104,19 +104,13 @@ def display_results_summary(results: list, rollout_manager: RolloutManager, cons
     
     # Add token usage statistics if available
     if any(result.token_usage for result in results):
-        total_cost = sum(result.token_usage.get("total_cost", 0) for result in results if result.token_usage)
         total_input_tokens = sum(result.token_usage.get("total_input_tokens", 0) for result in results if result.token_usage)
         total_output_tokens = sum(result.token_usage.get("total_output_tokens", 0) for result in results if result.token_usage)
         total_api_calls = sum(result.token_usage.get("api_calls", 0) for result in results if result.token_usage)
         
-        stats_table.add_row("Total Cost", f"${total_cost:.4f}")
         stats_table.add_row("Total Input Tokens", f"{total_input_tokens:,}")
         stats_table.add_row("Total Output Tokens", f"{total_output_tokens:,}")
         stats_table.add_row("Total API Calls", str(total_api_calls))
-        
-        if total_api_calls > 0:
-            avg_cost_per_call = total_cost / total_api_calls
-            stats_table.add_row("Avg Cost per Call", f"${avg_cost_per_call:.4f}")
     
     console.print(stats_table)
     console.print()
@@ -129,24 +123,17 @@ def display_results_summary(results: list, rollout_manager: RolloutManager, cons
         env_table.add_column("Success Rate", style="green")
         env_table.add_column("Avg Score", style="green")
         env_table.add_column("Avg Duration", style="green")
-        env_table.add_column("Avg Cost", style="yellow")
         
         for env_id, env_stats in summary["environments"].items():
             success_rate = env_stats["successful"] / env_stats["episodes"] if env_stats["episodes"] > 0 else 0
             avg_duration = env_stats["total_duration"] / env_stats["episodes"] if env_stats["episodes"] > 0 else 0
-            
-            # Calculate average cost for this environment
-            env_results = [r for r in results if r.environment_id == env_id]
-            total_env_cost = sum(r.token_usage.get("total_cost", 0) for r in env_results if r.token_usage)
-            avg_cost = total_env_cost / len(env_results) if env_results else 0
             
             env_table.add_row(
                 env_id,
                 str(env_stats["episodes"]),
                 f"{success_rate:.1%}",
                 f"{env_stats['avg_score']:.2f}",
-                f"{avg_duration:.2f}s",
-                f"${avg_cost:.4f}"
+                f"{avg_duration:.2f}s"
             )
         
         console.print(env_table)
@@ -196,7 +183,7 @@ async def main():
                        help="Suppress output except errors")
     
     # LLM configuration arguments
-    parser.add_argument("--llm-model", default="anthropic/claude-4-sonnet",
+    parser.add_argument("--llm-model", default="anthropic/claude-sonnet-4",
                        help="LLM model to use")
     parser.add_argument("--llm-api-key", required=True,
                        help="API key for the LLM service")
@@ -220,8 +207,6 @@ async def main():
                        help="Maximum messages in context before truncation")
     parser.add_argument("--llm-max-output-length", type=int, default=2000,
                        help="Maximum length of command output to include in context")
-    parser.add_argument("--llm-max-cost-per-episode", type=float, default=None,
-                       help="Maximum cost per episode in USD (e.g., 1.0 for $1)")
     parser.add_argument("--llm-disable-token-tracking", action="store_true",
                        help="Disable token usage tracking")
     parser.add_argument("--llm-disable-high-usage-warnings", action="store_true",
@@ -236,7 +221,7 @@ async def main():
     
     if not args.quiet:
         console.print(Panel(
-            "[bold blue]LLM RL Framework[/bold blue]\n"
+            "[bold blue]Real Work - Ritser Labs[/bold blue]\n"
             "Extensible framework for reinforcement learning with LLM agents",
             title="Welcome",
             border_style="blue"
@@ -264,7 +249,6 @@ async def main():
             max_output_length=args.llm_max_output_length,
             # Token usage tracking
             track_token_usage=not args.llm_disable_token_tracking,
-            max_cost_per_episode=args.llm_max_cost_per_episode,
             warn_high_usage=not args.llm_disable_high_usage_warnings
         )
         

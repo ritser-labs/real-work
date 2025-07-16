@@ -40,7 +40,6 @@ class LLMAgent:
         self.token_usage = {
             "total_input_tokens": 0,
             "total_output_tokens": 0,
-            "total_cost": 0.0,
             "api_calls": 0
         }
         
@@ -255,7 +254,7 @@ Always think step by step and be methodical in your approach. When you're done w
                 self.cache_misses += 1
                 self.logger.debug(f"Cache miss, making API call (hash: {conversation_hash[:8]})")
             
-            # Estimate input tokens for cost tracking
+            # Estimate input tokens for token usage tracking
             input_text = json.dumps(self.conversation_history)
             estimated_input_tokens = self._estimate_tokens(input_text)
             
@@ -503,28 +502,6 @@ Always think step by step and be methodical in your approach. When you're done w
         """Rough estimation of tokens (approximately 4 chars per token)"""
         return len(text) // 4
     
-    def _calculate_cost(self, input_tokens: int, output_tokens: int) -> float:
-        """Calculate approximate cost based on model and tokens"""
-        # Rough pricing estimates (per 1K tokens)
-        pricing = {
-            "gpt-4": {"input": 0.03, "output": 0.06},
-            "gpt-3.5-turbo": {"input": 0.001, "output": 0.002},
-            "claude-3-sonnet": {"input": 0.003, "output": 0.015},
-            "claude-3-opus": {"input": 0.015, "output": 0.075},
-            "anthropic/claude-3-sonnet": {"input": 0.003, "output": 0.015},
-            "anthropic/claude-3-opus": {"input": 0.015, "output": 0.075},
-            "anthropic/claude-4-sonnet": {"input": 0.003, "output": 0.015},
-            "anthropic/claude-sonnet-4": {"input": 0.003, "output": 0.015},
-        }
-        
-        # Default to GPT-4 pricing if model not found
-        model_pricing = pricing.get(self.config.model, pricing["gpt-4"])
-        
-        input_cost = (input_tokens / 1000) * model_pricing["input"]
-        output_cost = (output_tokens / 1000) * model_pricing["output"]
-        
-        return input_cost + output_cost
-    
     def _update_token_usage(self, input_tokens: int, output_tokens: int) -> None:
         """Update token usage statistics"""
         if not self.config.track_token_usage:
@@ -534,18 +511,11 @@ Always think step by step and be methodical in your approach. When you're done w
         self.token_usage["total_output_tokens"] += output_tokens
         self.token_usage["api_calls"] += 1
         
-        cost = self._calculate_cost(input_tokens, output_tokens)
-        self.token_usage["total_cost"] += cost
-        
         # Warn if usage is high
         if self.config.warn_high_usage:
-            if self.token_usage["total_cost"] > 10.0:  # $10 warning threshold
-                self.logger.warning(f"High token usage: ${self.token_usage['total_cost']:.2f}")
-        
-        # Check episode cost limit
-        if self.config.max_cost_per_episode:
-            if self.token_usage["total_cost"] > self.config.max_cost_per_episode:
-                raise RuntimeError(f"Episode cost limit exceeded: ${self.token_usage['total_cost']:.2f}")
+            total_tokens = input_tokens + output_tokens
+            if total_tokens > 10000:  # 10K token warning threshold
+                self.logger.warning(f"High token usage: {total_tokens:,} tokens")
     
     def get_token_usage_stats(self) -> Dict[str, Any]:
         """Get token usage statistics"""

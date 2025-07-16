@@ -86,7 +86,7 @@ uv run main.py examples/calculator_api/config.json \
 ```
 
 **LLM Configuration Options**:
-- `--llm-model`: LLM model to use (default: anthropic/claude-4-sonnet)
+- `--llm-model`: LLM model to use (default: anthropic/claude-sonnet-4)
 - `--llm-api-key`: API key for the LLM service (required)
 - `--llm-base-url`: Base URL for the LLM API (default: https://openrouter.ai/api/v1)
 - `--llm-temperature`: Temperature for sampling (default: 0.7)

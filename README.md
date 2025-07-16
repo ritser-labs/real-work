@@ -413,3 +413,9 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 - [ ] Support for multi-agent environments
 - [ ] Advanced trajectory analysis tools
 - [ ] Containerized deployment options
+
+## Security disclaimer
+
+The LLM can execute code in the Docker container, so be
+wary of advanced prompt injection attacks if you are using
+custom environments or models.

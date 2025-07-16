@@ -29,8 +29,8 @@ Currently, it is implemented to simulate software development workflows.
 
 1. Clone the repository:
 ```bash
-git clone <repository-url>
-cd llm-rl-framework
+git clone https://github.com/ritser-labs/real-work
+cd real-work
 ```
 
 2. Install dependencies:

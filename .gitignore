@@ -201,3 +201,8 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+trajectories/
+*results.json
+*results.stats.json
+state_snapshots/*

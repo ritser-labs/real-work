@@ -114,6 +114,10 @@ class Environment:
             # Wait for container to be ready
             await asyncio.sleep(2)
             
+            # Copy folders into container
+            for folder_path in self.config.copy_folders:
+                await self._copy_folder_to_container(folder_path)
+
             # Run initialization commands
             for cmd in self.config.init_commands:
                 result = await self._execute_command(cmd, timeout=self.timeout_config.command_timeout)
@@ -146,7 +150,8 @@ class Environment:
                 return await self._execute_command(
                     action.content,
                     timeout=action.timeout or self.timeout_config.command_timeout,
-                    working_dir=action.working_directory
+                    working_dir=action.working_directory,
+                    background=action.background
                 )
             elif action.type == ActionType.FILE_WRITE:
                 return await self._write_file(action.content)
@@ -176,29 +181,80 @@ class Environment:
                 timestamp=datetime.now().isoformat()
             )
     
-    async def _execute_command(self, command: str, timeout: int = None, 
-                              working_dir: str = None) -> ActionResult:
+    async def _execute_command(self, command: str, timeout: Optional[int] = None, 
+                              working_dir: Optional[str] = None, background: bool = False) -> ActionResult:
         """Execute a shell command in the container"""
         start_time = time.time()
         
+        if not self.container:
+            return ActionResult(
+                success=False,
+                error="Container not initialized",
+                duration=time.time() - start_time,
+                timestamp=datetime.now().isoformat()
+            )
+
         try:
             if working_dir:
                 command = f"cd {working_dir} && {command}"
-            
-            # Execute command
-            exec_result = self.container.exec_run(
-                command,
-                workdir=working_dir or self.config.working_directory,
-                user="1000:1000",
-                environment=self.config.environment_variables,
-                stdout=True,
-                stderr=True,
-                detach=False
-            )
-            
-            output = exec_result.output.decode('utf-8', errors='ignore')
-            exit_code = exec_result.exit_code
-            
+
+            if background:
+                self.logger.info(f"Running background command: {command}")
+                self.container.exec_run(
+                    f"/bin/sh -c '{command}'",
+                    detach=True,
+                    workdir=working_dir or self.config.working_directory,
+                    user="1000:1000",
+                    environment=self.config.environment_variables
+                )
+                return ActionResult(
+                    success=True,
+                    output=f"Command '{command}' started in background.",
+                    duration=time.time() - start_time,
+                    timestamp=datetime.now().isoformat()
+                )
+
+            # Function to run the command in a thread
+            def run_command_in_thread():
+                if not self.container:
+                    return None
+                return self.container.exec_run(
+                    f"/bin/sh -c '{command}'",
+                    workdir=working_dir or self.config.working_directory,
+                    user="1000:1000",
+                    environment=self.config.environment_variables,
+                    stdout=True,
+                    stderr=True,
+                    detach=False
+                )
+
+            # Execute with timeout
+            try:
+                exec_result = await asyncio.wait_for(
+                    asyncio.to_thread(run_command_in_thread),
+                    timeout=timeout
+                )
+
+                if exec_result is None:
+                    return ActionResult(
+                        success=False,
+                        error="Container was removed during command execution.",
+                        duration=time.time() - start_time,
+                        timestamp=datetime.now().isoformat()
+                    )
+
+                output = exec_result.output.decode('utf-8', errors='ignore')
+                exit_code = exec_result.exit_code
+
+            except asyncio.TimeoutError:
+                self.logger.warning(f"Command '{command[:50]}...' timed out after {timeout} seconds.")
+                return ActionResult(
+                    success=False,
+                    error=f"Command timed out after {timeout} seconds",
+                    duration=time.time() - start_time,
+                    timestamp=datetime.now().isoformat()
+                )
+
             return ActionResult(
                 success=exit_code == 0,
                 output=output,
@@ -209,6 +265,7 @@ class Environment:
             )
             
         except Exception as e:
+            self.logger.error(f"An unexpected error occurred in _execute_command: {e}")
             return ActionResult(
                 success=False,
                 error=str(e),
@@ -221,6 +278,14 @@ class Environment:
         start_time = time.time()
         
         try:
+            if not self.container:
+                return ActionResult(
+                    success=False,
+                    error="Container not initialized",
+                    duration=time.time() - start_time,
+                    timestamp=datetime.now().isoformat()
+                )
+            
             # Parse the file write request (format: "filepath:content")
             if ':' not in content:
                 return ActionResult(
@@ -279,6 +344,14 @@ class Environment:
         start_time = time.time()
         
         try:
+            if not self.container:
+                return ActionResult(
+                    success=False,
+                    error="Container not initialized",
+                    duration=time.time() - start_time,
+                    timestamp=datetime.now().isoformat()
+                )
+            
             # Get file from container
             archive_data, _ = self.container.get_archive(filepath)
             
@@ -294,8 +367,9 @@ class Environment:
                 for member in tar.getmembers():
                     if member.isfile():
                         file_obj = tar.extractfile(member)
-                        content = file_obj.read().decode('utf-8', errors='ignore')
-                        break
+                        if file_obj:
+                            content = file_obj.read().decode('utf-8', errors='ignore')
+                            break
             
             return ActionResult(
                 success=True,
@@ -315,6 +389,17 @@ class Environment:
     async def run_tests(self) -> List[Dict[str, Any]]:
         """Run unit tests and return results"""
         test_results = []
+        
+        if not self.container:
+            return [{
+                'command': 'container_check',
+                'success': False,
+                'output': "",
+                'error': "Container not initialized",
+                'exit_code': -1,
+                'duration': 0.0,
+                'timestamp': datetime.now().isoformat()
+            }]
         
         for test_command in self.config.unit_tests:
             start_time = time.time()
@@ -362,7 +447,7 @@ class Environment:
             return {'error': 'Container not initialized'}
         
         return await self.state_manager.save_state(
-            self.container.id,
+            str(self.container.id),
             snapshot_id,
             self.config.working_directory
         )
@@ -373,7 +458,7 @@ class Environment:
             return False
         
         return await self.state_manager.restore_state(
-            self.container.id,
+            str(self.container.id),
             snapshot_id,
             self.config.working_directory
         )
@@ -382,11 +467,41 @@ class Environment:
         """Clean up the environment"""
         try:
             if self.container:
-                self.container.stop()
-                self.container.remove()
-                self.logger.info(f"Environment {self.config.id} cleaned up")
+                # Reload container to get current state
+                try:
+                    if hasattr(self.container, 'reload'):
+                        self.container.reload()
+                    
+                    container_status = self.container.status
+                    
+                    # Only try to stop/remove if container is not already being removed
+                    container_id = self.container.id[:12] if self.container and hasattr(self.container, 'id') else "unknown"
+                    
+                    if container_status not in ['exited', 'dead']:
+                        self.logger.debug(f"Stopping container {container_id} (status: {container_status})")
+                        self.container.stop(timeout=5)
+                    
+                    # Try to remove the container
+                    self.logger.debug(f"Removing container {container_id}")
+                    self.container.remove(force=True)
+                    self.logger.info(f"Environment {self.config.id} cleaned up successfully")
+                    
+                except Exception as e:
+                    container_id = self.container.id[:12] if self.container and hasattr(self.container, 'id') else "unknown"
+                    # Check if it's a "container already being removed" error
+                    if "removal of container" in str(e) and "is already in progress" in str(e):
+                        self.logger.debug(f"Container {container_id} is already being removed")
+                    elif "No such container" in str(e):
+                        self.logger.debug(f"Container {container_id} no longer exists")
+                    else:
+                        # For other errors, log them but don't fail
+                        self.logger.warning(f"Error during container cleanup: {e}")
+                
         except Exception as e:
             self.logger.error(f"Error during cleanup: {e}")
+        finally:
+            # Always clear the container reference
+            self.container = None
     
     def get_container_info(self) -> Dict[str, Any]:
         """Get information about the container"""
@@ -394,24 +509,57 @@ class Environment:
             return {'status': 'not_initialized'}
         
         try:
-            self.container.reload()
+            if hasattr(self.container, 'reload'):
+                self.container.reload()
+            image_name = 'unknown'
+            if self.container.image and self.container.image.tags:
+                image_name = self.container.image.tags[0]
+            
+            attrs = self.container.attrs
+            if not attrs:
+                return {
+                    'id': str(self.container.id),
+                    'status': str(self.container.status),
+                    'image': image_name,
+                    'error': 'Container attributes not available'
+                }
+
             return {
-                'id': self.container.id,
-                'status': self.container.status,
-                'image': self.container.image.tags[0] if self.container.image.tags else 'unknown',
-                'created': self.container.attrs['Created'],
-                'started': self.container.attrs['State'].get('StartedAt'),
+                'id': str(self.container.id),
+                'status': str(self.container.status),
+                'image': image_name,
+                'created': attrs.get('Created'),
+                'started': attrs.get('State', {}).get('StartedAt'),
                 'working_dir': self.config.working_directory
             }
         except Exception as e:
             return {'error': str(e)}
     
-    async def get_file_list(self, directory: str = None) -> ActionResult:
+    async def get_file_list(self, directory: Optional[str] = None) -> ActionResult:
         """Get list of files in a directory"""
         dir_path = directory or self.config.working_directory
         return await self._execute_command(f"find {dir_path} -type f -name '*' | head -100")
     
-    async def get_directory_structure(self, directory: str = None) -> ActionResult:
+    async def get_directory_structure(self, directory: Optional[str] = None) -> ActionResult:
         """Get directory structure"""
         dir_path = directory or self.config.working_directory
-        return await self._execute_command(f"tree {dir_path} || find {dir_path} -type d | head -50") 
+        return await self._execute_command(f"tree {dir_path} || find {dir_path} -type d | head -50")
+    
+    async def _copy_folder_to_container(self, local_path: str):
+        """Copy a local folder to the container's working directory"""
+        if not Path(local_path).is_dir():
+            self.logger.warning(f"Local path '{local_path}' is not a valid directory, skipping copy.")
+            return
+
+        with tempfile.NamedTemporaryFile() as temp_tar:
+            # Create a tar archive of the local folder
+            with tarfile.open(temp_tar.name, 'w') as tar:
+                tar.add(local_path, arcname=Path(local_path).name)
+
+            # Go to the beginning of the temporary file
+            temp_tar.seek(0)
+            
+            # Copy the tar archive into the container
+            if self.container:
+                self.container.put_archive(self.config.working_directory, temp_tar.read())
+                self.logger.info(f"Copied folder '{local_path}' to container's working directory.") 

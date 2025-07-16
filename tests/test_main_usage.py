@@ -23,7 +23,12 @@ def create_test_config():
                 "init_commands": ["echo 'test'"],
                 "unit_tests": ["python -c \"print('test')\""],
                 "prompt": "Simple test prompt",
-                "working_directory": "/workspace"
+                "working_directory": "/tmp",
+                "environment_variables": {
+                    "PYTHONPATH": "/tmp",
+                    "HOME": "/tmp",
+                    "PATH": "/tmp/.local/bin:/usr/local/bin:/usr/bin:/bin"
+                }
             }
         ],
         "rollout_config": {

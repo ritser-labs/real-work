@@ -19,7 +19,8 @@ class EnvironmentConfig(BaseModel):
     prompt: str = Field(..., description="Environment-specific prompt describing the task")
     timeout_config: Optional[TimeoutConfig] = Field(default=None, description="Environment-specific timeout configuration")
     working_directory: str = Field(default="/workspace", description="Working directory inside the container")
-    environment_variables: Dict[str, str] = Field(default_factory=dict, description="Environment variables to set")
+    environment_variables: Dict[str, str] = Field(default_factory=dict, description="Environment variables")
+    copy_folders: List[str] = Field(default_factory=list, description="List of local folders to copy into the container")
     max_retries: int = Field(default=3, description="Maximum retries for failed operations")
 
 
@@ -31,6 +32,17 @@ class LLMConfig(BaseModel):
     temperature: float = Field(default=0.7, description="Temperature for sampling")
     max_tokens: int = Field(default=4096, description="Maximum tokens in response")
     timeout: int = Field(default=60, description="Timeout for API calls in seconds")
+    
+    # Token caching and context management
+    enable_caching: bool = Field(default=True, description="Enable response caching")
+    cache_size: int = Field(default=100, description="Maximum number of cached responses")
+    max_context_messages: int = Field(default=50, description="Maximum messages in context before truncation")
+    max_output_length: int = Field(default=2000, description="Maximum length of command output to include in context")
+    
+    # Token usage tracking
+    track_token_usage: bool = Field(default=True, description="Enable token usage tracking")
+    max_cost_per_episode: Optional[float] = Field(default=None, description="Maximum cost per episode in USD")
+    warn_high_usage: bool = Field(default=True, description="Warn when token usage is high")
 
 
 class RolloutConfig(BaseModel):
@@ -42,6 +54,15 @@ class RolloutConfig(BaseModel):
     state_persistence_enabled: bool = Field(default=True, description="Enable state persistence")
 
 
+class EpisodeControlConfig(BaseModel):
+    """Configuration for episode control logic"""
+    max_episodes: int = Field(default=1, description="Maximum number of episodes to run per environment")
+    max_episodes_per_env: Optional[int] = Field(default=None, description="Override max episodes for specific environments")
+    stop_on_success: bool = Field(default=False, description="Stop running episodes when one succeeds")
+    min_success_rate: Optional[float] = Field(default=None, description="Minimum success rate to maintain (0.0-1.0)")
+    safety_limit: int = Field(default=100, description="Absolute safety limit for episodes")
+
+
 class FrameworkConfig(BaseModel):
     """Main configuration for the framework"""
     environments: List[EnvironmentConfig] = Field(..., description="List of environments to run")
@@ -50,6 +71,7 @@ class FrameworkConfig(BaseModel):
     timeout_config: TimeoutConfig = Field(default_factory=TimeoutConfig, description="Global timeout configuration")
     template_prompt: str = Field(..., description="Template prompt that gets combined with environment-specific prompts")
     plugins: List[str] = Field(default_factory=list, description="List of plugin modules to load")
+    episode_control_config: EpisodeControlConfig = Field(default_factory=EpisodeControlConfig, description="Episode control configuration")
 
 
 class ActionType(str, Enum):
@@ -61,15 +83,16 @@ class ActionType(str, Enum):
 
 
 class Action(BaseModel):
-    """Represents an action taken by the LLM"""
-    type: ActionType = Field(..., description="Type of action")
-    content: str = Field(..., description="Action content (command, file content, etc.)")
-    timeout: Optional[int] = Field(default=None, description="Custom timeout for this action")
-    working_directory: Optional[str] = Field(default=None, description="Working directory for this action")
+    """Represents an action to be taken by the agent"""
+    type: ActionType
+    content: str
+    timeout: Optional[int] = None
+    working_directory: Optional[str] = None
+    background: bool = False
 
 
 class ActionResult(BaseModel):
-    """Result of an action execution"""
+    """Represents the result of an action"""
     success: bool = Field(..., description="Whether the action was successful")
     output: str = Field(default="", description="Output from the action")
     error: str = Field(default="", description="Error message if action failed")
@@ -97,4 +120,7 @@ class EpisodeResult(BaseModel):
     duration: float = Field(..., description="Total duration of episode")
     test_results: List[TestResult] = Field(..., description="Unit test results")
     terminated_reason: str = Field(..., description="Reason for termination (done, timeout, error)")
-    final_score: float = Field(default=0.0, description="Final score based on test results") 
+    final_score: float = Field(default=0.0, description="Final score based on test results")
+    
+    # Token usage statistics
+    token_usage: Optional[Dict[str, Any]] = Field(default=None, description="Token usage statistics for the episode") 

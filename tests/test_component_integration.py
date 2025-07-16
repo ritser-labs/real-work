@@ -50,17 +50,19 @@ class TestComponentIntegration:
                     "id": "test_simple",
                     "docker_image": "python:3.9-slim",
                     "init_commands": [
-                        "pip install requests",
-                        "mkdir -p /workspace"
+                        "pip install --user requests",
+                        "mkdir -p /tmp"
                     ],
                     "unit_tests": [
                         "python -c \"print('Hello, World!')\"",
                         "python -c \"import requests; print('requests imported successfully')\""
                     ],
                     "prompt": "Create a simple Python script that prints 'Hello, World!' and demonstrates that requests library is available.",
-                    "working_directory": "/workspace",
+                    "working_directory": "/tmp",
                     "environment_variables": {
-                        "PYTHONPATH": "/workspace"
+                        "PYTHONPATH": "/tmp",
+                        "HOME": "/tmp",
+                        "PATH": "/tmp/.local/bin:/usr/local/bin:/usr/bin:/bin"
                     }
                 }
             ],

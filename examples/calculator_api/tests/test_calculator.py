@@ -26,7 +26,7 @@ class TestCalculatorAPI:
             # Start the Flask app in background
             cls.app_process = subprocess.Popen(
                 ["python", "app.py"],
-                cwd="/workspace",
+                cwd="/tmp",
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE
             )

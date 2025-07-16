@@ -40,7 +40,12 @@ def test_config_loading():
                 "init_commands": ["pip install flask"],
                 "unit_tests": ["python -c 'print(\"test\")'"],
                 "prompt": "Test prompt",
-                "working_directory": "/workspace"
+                "working_directory": "/tmp",
+                "environment_variables": {
+                    "PYTHONPATH": "/tmp",
+                    "HOME": "/tmp",
+                    "PATH": "/tmp/.local/bin:/usr/local/bin:/usr/bin:/bin"
+                }
             }
         ],
         "llm_config": {

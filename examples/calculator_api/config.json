@@ -4,20 +4,22 @@
       "id": "calculator_api",
       "docker_image": "python:3.9-slim",
       "init_commands": [
-        "pip install flask pytest requests",
-        "mkdir -p /workspace/tests",
-        "cd /workspace"
+        "pip install --user flask pytest requests"
       ],
       "unit_tests": [
-        "cd /workspace && python -m pytest tests/ -v",
-        "cd /workspace && python -c \"import requests; r = requests.get('http://localhost:5000/health'); assert r.status_code == 200\""
+        "sh -c 'PYTHONPATH=/tmp python -m pytest /tmp/tests/test_app.py -v'"
       ],
-      "prompt": "Create a REST API for a calculator application with the following requirements:\n\n1. Create a Flask application that provides a calculator API\n2. The API should support basic operations: addition, subtraction, multiplication, division\n3. Endpoints should be:\n   - POST /calculate with JSON body: {\"operation\": \"add\", \"numbers\": [1, 2, 3]}\n   - GET /health for health check\n4. Handle errors gracefully (division by zero, invalid operations, etc.)\n5. Return results in JSON format: {\"result\": 6}\n6. The application should run on port 5000\n7. Include proper error handling and status codes\n\nThe unit tests will verify:\n- Basic arithmetic operations work correctly\n- Error handling for invalid inputs\n- Health check endpoint\n- API returns proper JSON responses\n\nStart the Flask application after implementing it so the tests can run against it.",
-      "working_directory": "/workspace",
+      "prompt": "Create a Flask calculator API with a single `/calculate` endpoint that accepts POST requests with JSON body: {\"operation\": \"add|subtract|multiply|divide\", \"numbers\": [1, 2, 3]}. Also add a `/health` endpoint that returns {\"status\": \"ok\"}. The requirements are in the test file `tests/test_app.py`. Your task is to:\n1. Write the Flask application code to a file named `app/__init__.py` (not app.py).\n2. Ensure the Flask app instance is named `app` and is importable as `from app import app`.\n3. Handle division by zero by returning a 400 status code with an error message.\n4. Run the Flask application as a background task using the `background` flag.",
+      "working_directory": "/tmp",
       "environment_variables": {
-        "PYTHONPATH": "/workspace",
-        "FLASK_ENV": "development"
-      }
+        "PYTHONPATH": "/tmp",
+        "FLASK_ENV": "development",
+        "HOME": "/tmp",
+        "PATH": "/tmp/.local/bin:/usr/local/bin:/usr/bin:/bin"
+      },
+      "copy_folders": [
+        "examples/calculator_api/tests"
+      ]
     }
   ],
   "rollout_config": {
@@ -25,11 +27,18 @@
     "trajectory_output_path": "trajectories",
     "enable_plugins": true
   },
+  "episode_control_config": {
+    "max_episodes": 3,
+    "max_episodes_per_env": null,
+    "stop_on_success": false,
+    "min_success_rate": null,
+    "safety_limit": 100
+  },
   "timeout_config": {
     "global_timeout": 1800,
-    "command_timeout": 300,
+    "command_timeout": 30,
     "test_timeout": 120
   },
-  "template_prompt": "You are an expert software engineer working in a Docker container environment. You have access to shell commands, can read and write files, and should implement the requested functionality step by step.\n\nYour environment has:\n- Shell access with common Unix tools\n- Python 3.9 with pip for package management\n- Access to install packages as needed\n- Working directory at /workspace\n\nAlways:\n1. Think through the problem step by step\n2. Implement clean, well-structured code\n3. Test your implementation as you go\n4. Handle errors gracefully\n5. Use proper logging and documentation\n\nWhen you complete the task, use <done> to indicate completion.",
+  "template_prompt": "You are an expert software engineer working in a Docker container environment. You have access to shell commands, can read and write files, and should implement the requested functionality step by step.\n\nYour environment has:\n- Shell access with common Unix tools\n- Python 3.9 with pip for package management\n- Access to install packages as needed\n- Working directory at /tmp\n\nAlways:\n1. Think through the problem step by step\n2. Implement clean, well-structured code\n3. Test your implementation as you go\n4. Handle errors gracefully\n5. Use proper logging and documentation\n\nWhen writing a file, provide only the raw code content. Do not include any markdown formatting like ` ```python `.\nWhen you complete the task, use <done> to indicate completion.",
   "plugins": []
 } 

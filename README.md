@@ -59,10 +59,15 @@ Or set it directly in the configuration file.
     {
       "id": "my_env",
       "docker_image": "python:3.9-slim",
-      "init_commands": ["pip install flask pytest"],
+      "init_commands": ["pip install --user flask pytest"],
       "unit_tests": ["python -m pytest tests/"],
       "prompt": "Your task description here...",
-      "working_directory": "/workspace"
+      "working_directory": "/tmp",
+      "environment_variables": {
+        "PYTHONPATH": "/tmp",
+        "HOME": "/tmp",
+        "PATH": "/tmp/.local/bin:/usr/local/bin:/usr/bin:/bin"
+      }
     }
   ],
   "rollout_config": {
@@ -74,9 +79,9 @@ Or set it directly in the configuration file.
 
 2. **Run the framework**:
 ```bash
-uv run python main.py examples/calculator_api/config.json \
+uv run main.py examples/calculator_api/config.json \
   --llm-api-key your-api-key-here \
-  --llm-model anthropic/claude-4-sonnet \
+  --llm-model anthropic/claude-sonnet-4 \
   --llm-base-url https://openrouter.ai/api/v1
 ```
 

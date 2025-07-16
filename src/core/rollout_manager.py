@@ -10,6 +10,7 @@ from .config import (
     FrameworkConfig, EnvironmentConfig, LLMConfig, RolloutConfig,
     Action, ActionResult, ActionType, EpisodeResult, TestResult
 )
+from .episode_controller import EpisodeController
 from .trajectory import TrajectoryManager, Trajectory
 from .test_runner import UnitTestRunner
 from ..environments.environment import Environment, StateManager
@@ -75,6 +76,9 @@ class Episode:
             # Calculate final score
             final_score = self.test_runner.calculate_test_score(test_results)
             
+            # Get token usage statistics from the agent
+            token_usage = self.agent.get_token_usage_stats() if hasattr(self.agent, 'get_token_usage_stats') else None
+            
             # Create episode result
             episode_result = EpisodeResult(
                 environment_id=self.environment.config.id,
@@ -83,7 +87,8 @@ class Episode:
                 duration=time.time() - self.start_time,
                 test_results=test_results,
                 terminated_reason=result["reason"],
-                final_score=final_score
+                final_score=final_score,
+                token_usage=token_usage
             )
             
             # Finalize trajectory
@@ -133,18 +138,39 @@ class Episode:
         while True:
             # Check global timeout
             if time.time() - start_time > timeout:
+                self.logger.error(f"Global timeout reached after {timeout} seconds")
                 return {"success": False, "reason": "global_timeout"}
             
             # Check action limit
             if self.actions_taken >= 100:  # Safety limit
+                self.logger.error(f"Action limit reached: {self.actions_taken}")
                 return {"success": False, "reason": "action_limit"}
+            
+            self.logger.info(f"Episode loop iteration {self.actions_taken + 1}, elapsed: {time.time() - start_time:.1f}s")
             
             # Get next actions from LLM
             try:
-                actions = await self.agent.get_next_action(previous_result)
+                self.logger.debug("Calling agent.get_next_action...")
+                result = await self.agent.get_next_action(previous_result)
+                if isinstance(result, tuple):
+                    actions, tool_calls_info = result
+                else:
+                    # Handle backwards compatibility
+                    actions = result
+                    tool_calls_info = []
+                
+                self.logger.info(f"Got {len(actions)} actions from LLM")  # type: ignore
+                for i, action in enumerate(actions):  # type: ignore
+                    self.logger.debug(f"Action {i}: {action.type} - {action.content[:100]}...")
+                    
             except Exception as e:
                 self.logger.error(f"Error getting next action: {e}")
                 return {"success": False, "reason": f"llm_error: {e}"}
+            
+            # Check if we got valid actions
+            if not actions:
+                self.logger.info("No actions received from LLM - treating as task completion")
+                return {"success": True, "reason": "completed_naturally"}
             
             # Execute pre-action plugins
             context = PluginContext(
@@ -160,15 +186,30 @@ class Episode:
             
             # Get filtered actions
             filtered_actions = context.get("actions", actions)
+            if not filtered_actions:
+                self.logger.info("No actions after plugin filtering - treating as task completion")
+                return {"success": True, "reason": "completed_naturally"}
+            
+            self.logger.debug(f"After plugin filtering: {len(filtered_actions)} actions")
             
             # Execute actions
-            for action in filtered_actions:
+            for i, action in enumerate(filtered_actions):
+                self.logger.info(f"Executing action {i+1}/{len(filtered_actions)}: {action.type}")
+                
                 if action.type == ActionType.DONE:
+                    self.logger.info("LLM called mark_done - episode completed")
                     return {"success": True, "reason": "completed"}
                 
                 # Execute action
+                self.logger.debug(f"Environment executing: {action.content[:100]}...")
                 result = await self.environment.execute_action(action)
                 self.actions_taken += 1
+                
+                self.logger.info(f"Action result: success={result.success}, duration={result.duration:.2f}s")
+                if not result.success:
+                    self.logger.warning(f"Action failed: {result.error[:200]}...")
+                else:
+                    self.logger.debug(f"Action output: {result.output[:200]}...")
                 
                 # Save state snapshot periodically
                 state_snapshot = None
@@ -177,9 +218,10 @@ class Episode:
                     state_snapshot = await self.environment.save_state(snapshot_id)
                 
                 # Add to trajectory
-                await self.trajectory_manager.add_step(
-                    self.trajectory_id, action, result, state_snapshot
-                )
+                if self.trajectory_id:
+                    await self.trajectory_manager.add_step(
+                        self.trajectory_id, action, result, state_snapshot
+                    )
                 
                 # Execute post-action plugins
                 context = PluginContext(
@@ -201,6 +243,7 @@ class Episode:
                 
                 # Check if we should continue
                 if not result.success and "timeout" in result.error.lower():
+                    self.logger.error("Action timed out")
                     return {"success": False, "reason": "action_timeout"}
         
         return {"success": False, "reason": "unknown"}
@@ -218,6 +261,7 @@ class RolloutManager:
         self.test_runner = UnitTestRunner(config.timeout_config)
         self.plugin_manager = PluginManager()
         self.state_manager = StateManager()
+        self.episode_controller = EpisodeController(config.episode_control_config)
         self.logger = logging.getLogger("RolloutManager")
         
         # Track rollout statistics
@@ -302,17 +346,11 @@ class RolloutManager:
         """Run rollouts in parallel"""
         semaphore = asyncio.Semaphore(self.config.rollout_config.max_parallel_rollouts)
         
-        async def run_environment_rollouts(env_config: EnvironmentConfig) -> List[EpisodeResult]:
+        async def run_with_semaphore(env_config: EnvironmentConfig) -> List[EpisodeResult]:
             async with semaphore:
                 return await self._run_environment_rollouts(env_config)
-        
-        # Create tasks for each environment
-        tasks = []
-        for env_config in self.config.environments:
-            task = run_environment_rollouts(env_config)
-            tasks.append(task)
-        
-        # Execute all tasks
+
+        tasks = [run_with_semaphore(env_config) for env_config in self.config.environments]
         results = await asyncio.gather(*tasks, return_exceptions=True)
         
         # Flatten results
@@ -320,8 +358,10 @@ class RolloutManager:
         for result in results:
             if isinstance(result, Exception):
                 self.logger.error(f"Error in parallel rollout: {result}")
-            else:
+            elif isinstance(result, list):
                 all_results.extend(result)
+            else:
+                self.logger.warning(f"Unexpected result type: {type(result)}")
         
         return all_results
     
@@ -355,8 +395,17 @@ class RolloutManager:
         try:
             episode_count = 0
             
-            # Run episodes until plugins say to stop
-            while episode_count < 20:  # Safety limit
+            # Run episodes until episode controller or plugins say to stop
+            while True:
+                # Check episode controller first
+                controller_decision = self.episode_controller.should_continue_episodes(
+                    episode_count, results, env_config.id
+                )
+                
+                if not controller_decision["continue"]:
+                    self.logger.info(f"Episode controller stopping rollouts for {env_config.id}: {controller_decision['reason']}")
+                    break
+                
                 # Check if we should continue with plugins
                 context = PluginContext(
                     environment_id=env_config.id,
@@ -368,15 +417,21 @@ class RolloutManager:
                 rollout_plugins = self.plugin_manager.get_plugins_by_type(PluginType.ROLLOUT_MANAGER)
                 
                 for plugin in rollout_plugins:
-                    if plugin.is_enabled():
-                        plugin_should_continue = await plugin.should_continue_rollout(context)
-                        should_continue = should_continue and plugin_should_continue
+                    if plugin.is_enabled() and hasattr(plugin, 'should_continue_rollout'):
+                        try:
+                            plugin_should_continue = await getattr(plugin, 'should_continue_rollout')(context)
+                            should_continue = should_continue and plugin_should_continue
+                        except AttributeError:
+                            pass  # Plugin doesn't have should_continue_rollout method
                 
                 if not should_continue:
                     self.logger.info(f"Stopping rollouts for {env_config.id} based on plugin decision")
                     break
                 
                 # Create LLM agent
+                if not self.config.llm_config:
+                    self.logger.error("LLM config is None")
+                    return []
                 agent = LLMAgentFactory.create_agent(self.config.llm_config)
                 
                 # Run episode

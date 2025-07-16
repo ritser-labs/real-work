@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Dict, Any
 import traceback
 
-from src.core.config import FrameworkConfig, LLMConfig
+from src.core.config import FrameworkConfig, LLMConfig, EpisodeControlConfig
 from src.core.rollout_manager import RolloutManager
 from rich.console import Console
 from rich.logging import RichHandler
@@ -58,7 +58,9 @@ def display_config_summary(config: FrameworkConfig, console: Console) -> None:
     table.add_column("Value", style="green")
     
     table.add_row("Environments", str(len(config.environments)))
-    table.add_row("LLM Model", config.llm_config.model)
+    table.add_row("LLM Model", config.llm_config.model if config.llm_config else "Not configured")
+    table.add_row("Max Episodes", str(config.episode_control_config.max_episodes))
+    table.add_row("Stop on Success", str(config.episode_control_config.stop_on_success))
     table.add_row("Max Parallel Rollouts", str(config.rollout_config.max_parallel_rollouts))
     table.add_row("Global Timeout", f"{config.timeout_config.global_timeout}s")
     table.add_row("Output Path", config.rollout_config.trajectory_output_path)
@@ -100,6 +102,22 @@ def display_results_summary(results: list, rollout_manager: RolloutManager, cons
     stats_table.add_row("Average Duration", f"{summary['avg_duration']:.2f}s")
     stats_table.add_row("Total Duration", f"{summary['total_duration']:.2f}s")
     
+    # Add token usage statistics if available
+    if any(result.token_usage for result in results):
+        total_cost = sum(result.token_usage.get("total_cost", 0) for result in results if result.token_usage)
+        total_input_tokens = sum(result.token_usage.get("total_input_tokens", 0) for result in results if result.token_usage)
+        total_output_tokens = sum(result.token_usage.get("total_output_tokens", 0) for result in results if result.token_usage)
+        total_api_calls = sum(result.token_usage.get("api_calls", 0) for result in results if result.token_usage)
+        
+        stats_table.add_row("Total Cost", f"${total_cost:.4f}")
+        stats_table.add_row("Total Input Tokens", f"{total_input_tokens:,}")
+        stats_table.add_row("Total Output Tokens", f"{total_output_tokens:,}")
+        stats_table.add_row("Total API Calls", str(total_api_calls))
+        
+        if total_api_calls > 0:
+            avg_cost_per_call = total_cost / total_api_calls
+            stats_table.add_row("Avg Cost per Call", f"${avg_cost_per_call:.4f}")
+    
     console.print(stats_table)
     console.print()
     
@@ -111,20 +129,44 @@ def display_results_summary(results: list, rollout_manager: RolloutManager, cons
         env_table.add_column("Success Rate", style="green")
         env_table.add_column("Avg Score", style="green")
         env_table.add_column("Avg Duration", style="green")
+        env_table.add_column("Avg Cost", style="yellow")
         
         for env_id, env_stats in summary["environments"].items():
             success_rate = env_stats["successful"] / env_stats["episodes"] if env_stats["episodes"] > 0 else 0
             avg_duration = env_stats["total_duration"] / env_stats["episodes"] if env_stats["episodes"] > 0 else 0
+            
+            # Calculate average cost for this environment
+            env_results = [r for r in results if r.environment_id == env_id]
+            total_env_cost = sum(r.token_usage.get("total_cost", 0) for r in env_results if r.token_usage)
+            avg_cost = total_env_cost / len(env_results) if env_results else 0
             
             env_table.add_row(
                 env_id,
                 str(env_stats["episodes"]),
                 f"{success_rate:.1%}",
                 f"{env_stats['avg_score']:.2f}",
-                f"{avg_duration:.2f}s"
+                f"{avg_duration:.2f}s",
+                f"${avg_cost:.4f}"
             )
         
         console.print(env_table)
+    
+    # Token usage and cache statistics
+    if any(result.token_usage for result in results):
+        cache_hits = sum(result.token_usage.get("cache_hits", 0) for result in results if result.token_usage)
+        cache_misses = sum(result.token_usage.get("cache_misses", 0) for result in results if result.token_usage)
+        cache_hit_rate = cache_hits / (cache_hits + cache_misses) if (cache_hits + cache_misses) > 0 else 0
+        
+        cache_panel = Panel(
+            f"[bold]Cache Hits:[/bold] {cache_hits:,}\n"
+            f"[bold]Cache Misses:[/bold] {cache_misses:,}\n"
+            f"[bold]Cache Hit Rate:[/bold] {cache_hit_rate:.1%}\n"
+            f"[bold]Total Requests:[/bold] {cache_hits + cache_misses:,}",
+            title="Cache Statistics",
+            border_style="blue"
+        )
+        console.print(cache_panel)
+        console.print()
     
     # Plugin statistics
     if "plugin_stats" in summary:
@@ -167,6 +209,24 @@ async def main():
     parser.add_argument("--llm-timeout", type=int, default=60,
                        help="Timeout for LLM API calls in seconds")
     
+    # Token caching and context management options
+    parser.add_argument("--llm-enable-caching", action="store_true", default=True,
+                       help="Enable response caching to reduce API calls")
+    parser.add_argument("--llm-disable-caching", action="store_true",
+                       help="Disable response caching")
+    parser.add_argument("--llm-cache-size", type=int, default=100,
+                       help="Maximum number of cached responses")
+    parser.add_argument("--llm-max-context-messages", type=int, default=50,
+                       help="Maximum messages in context before truncation")
+    parser.add_argument("--llm-max-output-length", type=int, default=2000,
+                       help="Maximum length of command output to include in context")
+    parser.add_argument("--llm-max-cost-per-episode", type=float, default=None,
+                       help="Maximum cost per episode in USD (e.g., 1.0 for $1)")
+    parser.add_argument("--llm-disable-token-tracking", action="store_true",
+                       help="Disable token usage tracking")
+    parser.add_argument("--llm-disable-high-usage-warnings", action="store_true",
+                       help="Disable high usage warnings")
+    
     args = parser.parse_args()
     
     # Set up logging
@@ -196,7 +256,16 @@ async def main():
             base_url=args.llm_base_url,
             temperature=args.llm_temperature,
             max_tokens=args.llm_max_tokens,
-            timeout=args.llm_timeout
+            timeout=args.llm_timeout,
+            # Token caching and context management
+            enable_caching=args.llm_enable_caching and not args.llm_disable_caching,
+            cache_size=args.llm_cache_size,
+            max_context_messages=args.llm_max_context_messages,
+            max_output_length=args.llm_max_output_length,
+            # Token usage tracking
+            track_token_usage=not args.llm_disable_token_tracking,
+            max_cost_per_episode=args.llm_max_cost_per_episode,
+            warn_high_usage=not args.llm_disable_high_usage_warnings
         )
         
         if not args.quiet:

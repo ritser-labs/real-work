@@ -2,9 +2,11 @@ import openai
 import json
 import os
 import asyncio
+import hashlib
 from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime
 import logging
+import time
 
 from ..core.config import LLMConfig, Action, ActionType, ActionResult
 
@@ -26,7 +28,21 @@ class LLMAgent:
         )
         
         self.conversation_history: List[Dict[str, Any]] = []
+        self.pending_tool_calls: List[Dict[str, Any]] = []  # Store tool calls awaiting results
         self.logger = logging.getLogger("LLMAgent")
+        
+        # Token caching
+        self.response_cache: Dict[str, Dict[str, Any]] = {}  # hash -> cached response
+        self.cache_hits = 0
+        self.cache_misses = 0
+        
+        # Token usage tracking
+        self.token_usage = {
+            "total_input_tokens": 0,
+            "total_output_tokens": 0,
+            "total_cost": 0.0,
+            "api_calls": 0
+        }
         
         # Define tools for the LLM
         self.tools = [
@@ -44,11 +60,15 @@ class LLMAgent:
                             },
                             "timeout": {
                                 "type": "integer",
-                                "description": "Optional timeout in seconds for the command"
+                                "description": "Optional timeout in seconds"
                             },
                             "working_directory": {
                                 "type": "string",
-                                "description": "Optional working directory to execute the command in"
+                                "description": "Optional working directory"
+                            },
+                            "background": {
+                                "type": "boolean",
+                                "description": "Run command in background and don't wait for it"
                             }
                         },
                         "required": ["command"]
@@ -126,7 +146,8 @@ class LLMAgent:
             type=ActionType.COMMAND,
             content=kwargs["command"],
             timeout=kwargs.get("timeout"),
-            working_directory=kwargs.get("working_directory")
+            working_directory=kwargs.get("working_directory"),
+            background=kwargs.get("background", False)
         )
     
     def _create_file_write_action(self, **kwargs) -> Action:
@@ -161,8 +182,6 @@ class LLMAgent:
         system_prompt = f"""
 {template_prompt}
 
-{environment_prompt}
-
 You are working in a Docker environment with shell access. You can execute commands, read/write files, and complete coding tasks. The unit tests will evaluate your work, but you don't have access to the test code itself.
 
 You have access to the following tools:
@@ -175,91 +194,189 @@ Always think step by step and be methodical in your approach. When you're done w
 """
         
         self.conversation_history = [
-            {"role": "system", "content": system_prompt.strip()}
+            {"role": "system", "content": system_prompt.strip()},
+            {"role": "user", "content": environment_prompt.strip()}
         ]
         
-        self.logger.info("Conversation initialized with system prompt")
+        self.logger.info("Conversation initialized with system prompt and user message")
     
-    async def get_next_action(self, previous_result: Optional[ActionResult] = None) -> List[Action]:
-        """Get next action(s) from the LLM using tool calling"""
+    async def get_next_action(self, previous_result: Optional[ActionResult] = None) -> Tuple[List[Action], List[Dict[str, Any]]]:
+        """Get next action(s) from the LLM using tool calling with caching and truncation"""
         try:
-            # Add previous result to conversation if available
-            if previous_result:
-                result_message = f"Previous action result (success={previous_result.success}):\n"
-                if previous_result.output:
-                    result_message += f"Output: {previous_result.output}\n"
-                if previous_result.error:
-                    result_message += f"Error: {previous_result.error}\n"
+            self.logger.debug(f"get_next_action called with previous_result: {previous_result is not None}")
+            
+            # Add tool results for previous actions if available
+            if previous_result and self.pending_tool_calls:
+                self.logger.debug(f"Adding tool results for {len(self.pending_tool_calls)} pending tool calls")
+                # Add tool results to conversation
+                for tool_call_info in self.pending_tool_calls:
+                    result_content = f"Success: {previous_result.success}\n"
+                    if previous_result.output:
+                        # Truncate large outputs
+                        truncated_output = self._truncate_output(previous_result.output)
+                        result_content += f"Output: {truncated_output}\n"
+                    if previous_result.error:
+                        # Truncate large errors
+                        truncated_error = self._truncate_output(previous_result.error)
+                        result_content += f"Error: {truncated_error}\n"
+                    if hasattr(previous_result, 'exit_code') and previous_result.exit_code is not None:
+                        result_content += f"Exit code: {previous_result.exit_code}\n"
+                    
+                    self.conversation_history.append({
+                        "role": "tool",
+                        "tool_call_id": tool_call_info["id"],
+                        "name": tool_call_info["name"],
+                        "content": result_content.strip()
+                    })
+                    self.logger.debug(f"Added tool result for {tool_call_info['name']}: {result_content[:100]}...")
                 
-                self.conversation_history.append({
-                    "role": "user",
-                    "content": result_message
-                })
+                # Clear pending tool calls
+                self.pending_tool_calls = []
+            
+            # Truncate conversation if it's getting too long
+            self.truncate_conversation()
+            
+            self.logger.debug(f"Conversation has {len(self.conversation_history)} messages")
+            
+            # Check cache if enabled
+            conversation_hash = None
+            if self.config.enable_caching:
+                conversation_hash = self._get_conversation_hash(self.conversation_history)
+                
+                # Check if we have a cached response
+                if conversation_hash in self.response_cache:
+                    cached_response = self.response_cache[conversation_hash]
+                    self.cache_hits += 1
+                    self.logger.debug(f"Cache hit! Using cached response (hash: {conversation_hash[:8]})")
+                    
+                    # Return cached actions and tool calls
+                    return cached_response["actions"], cached_response["tool_calls_info"]
+                
+                self.cache_misses += 1
+                self.logger.debug(f"Cache miss, making API call (hash: {conversation_hash[:8]})")
+            
+            # Estimate input tokens for cost tracking
+            input_text = json.dumps(self.conversation_history)
+            estimated_input_tokens = self._estimate_tokens(input_text)
             
             # Get response from LLM with tools
+            self.logger.debug("Making API call to LLM...")
+            start_time = time.time()
+            
             response = await self.client.chat.completions.create(
                 model=self.config.model,
-                messages=self.conversation_history,
-                tools=self.tools,
+                messages=self.conversation_history,  # type: ignore
+                tools=self.tools,  # type: ignore
                 temperature=self.config.temperature,
                 max_tokens=self.config.max_tokens,
                 timeout=self.config.timeout
             )
             
-            assistant_message = response.choices[0].message
+            api_duration = time.time() - start_time
+            self.logger.debug(f"API call completed in {api_duration:.2f}s")
+            
+            if not response or not response.choices:
+                self.logger.error("No response received from LLM")
+                return [], []
+            
+            assistant_message = response.choices[0].message  # type: ignore
+            content_preview = (assistant_message.content or "")[:100]
+            self.logger.debug(f"Assistant response: {content_preview}...")
+            
+            # Update token usage tracking
+            if hasattr(response, 'usage') and response.usage:
+                input_tokens = response.usage.prompt_tokens
+                output_tokens = response.usage.completion_tokens
+                self._update_token_usage(input_tokens, output_tokens)
+                self.logger.debug(f"Token usage: {input_tokens} input, {output_tokens} output")
+            else:
+                # Fallback to estimation
+                output_text = assistant_message.content or ""
+                estimated_output_tokens = self._estimate_tokens(output_text)
+                self._update_token_usage(estimated_input_tokens, estimated_output_tokens)
+                self.logger.debug(f"Estimated token usage: {estimated_input_tokens} input, {estimated_output_tokens} output")
+            
+            # Convert tool_calls to proper dictionary format
+            tool_calls_dict = None
+            if assistant_message.tool_calls:
+                self.logger.debug(f"Assistant made {len(assistant_message.tool_calls)} tool calls")
+                tool_calls_dict = []
+                for tool_call in assistant_message.tool_calls:
+                    tool_calls_dict.append({
+                        "id": tool_call.id,
+                        "type": tool_call.type,
+                        "function": {
+                            "name": tool_call.function.name,
+                            "arguments": tool_call.function.arguments
+                        }
+                    })
+                    self.logger.debug(f"Tool call: {tool_call.function.name} with args: {tool_call.function.arguments}")
+            else:
+                self.logger.debug("Assistant made no tool calls")
             
             # Add assistant response to conversation
             self.conversation_history.append({
                 "role": "assistant",
                 "content": assistant_message.content,
-                "tool_calls": assistant_message.tool_calls
+                "tool_calls": tool_calls_dict
             })
             
             actions = []
+            tool_calls_info = []
             
             # Process tool calls
             if assistant_message.tool_calls:
+                self.logger.debug(f"Processing {len(assistant_message.tool_calls)} tool calls...")
                 for tool_call in assistant_message.tool_calls:
                     tool_name = tool_call.function.name
                     tool_args = json.loads(tool_call.function.arguments)
+                    
+                    self.logger.debug(f"Processing tool call: {tool_name}")
                     
                     if tool_name in self.tool_mapping:
                         action = self.tool_mapping[tool_name](**tool_args)
                         actions.append(action)
                         
-                        # Add tool result placeholder to conversation
-                        # This will be filled in after action execution
-                        self.conversation_history.append({
-                            "role": "tool",
-                            "tool_call_id": tool_call.id,
+                        # Store tool call info for later use
+                        tool_call_info = {
+                            "id": tool_call.id,
                             "name": tool_name,
-                            "content": "Action executed - result will be provided"
-                        })
+                            "args": tool_args
+                        }
+                        tool_calls_info.append(tool_call_info)
+                        
+                        self.logger.debug(f"Created action: {action.type} - {action.content[:100]}...")
                     else:
                         self.logger.warning(f"Unknown tool: {tool_name}")
             
-            # If no tool calls, treat as a thinking step
+            # Store pending tool calls
+            self.pending_tool_calls = tool_calls_info
+            
+            # Cache the response if caching is enabled
+            if self.config.enable_caching and conversation_hash:
+                # Clean up cache if it's getting too large
+                if len(self.response_cache) >= self.config.cache_size:
+                    # Remove oldest entries (simple FIFO)
+                    oldest_key = next(iter(self.response_cache))
+                    del self.response_cache[oldest_key]
+                
+                self.response_cache[conversation_hash] = {
+                    "actions": actions,
+                    "tool_calls_info": tool_calls_info,
+                    "timestamp": time.time()
+                }
+                self.logger.debug(f"Cached response (hash: {conversation_hash[:8]})")
+            
+            # If no tool calls, return empty actions (task completion)
             if not actions:
-                self.logger.info("No tool calls in response, treating as thinking step")
-                # Return a placeholder action that will be skipped
-                actions = [Action(
-                    type=ActionType.COMMAND,
-                    content="echo 'Thinking...'",
-                    timeout=None,
-                    working_directory=None
-                )]
+                self.logger.debug("No tool calls in response, treating as task completion")
             
             self.logger.info(f"Generated {len(actions)} actions from tool calls")
-            return actions
+            return actions, tool_calls_info
             
         except Exception as e:
             self.logger.error(f"Error getting LLM response: {e}")
-            return [Action(
-                type=ActionType.DONE,
-                content=f"Error: {str(e)}",
-                timeout=None,
-                working_directory=None
-            )]
+            return [], []
     
     async def add_context(self, context: str) -> None:
         """Add context information to the conversation"""
@@ -296,6 +413,7 @@ Always think step by step and be methodical in your approach. When you're done w
     async def reset_conversation(self) -> None:
         """Reset the conversation history"""
         self.conversation_history = []
+        self.pending_tool_calls = []
         self.logger.info("Conversation history reset")
     
     async def save_conversation(self, filepath: str) -> None:
@@ -321,15 +439,143 @@ Always think step by step and be methodical in your approach. When you're done w
             self.logger.error(f"Error loading conversation: {e}")
             return False
     
-    def truncate_conversation(self, max_messages: int = 20) -> None:
-        """Truncate conversation history to keep recent messages"""
-        if len(self.conversation_history) > max_messages:
-            # Keep system messages and recent messages
-            system_messages = [msg for msg in self.conversation_history if msg["role"] == "system"]
-            recent_messages = self.conversation_history[-(max_messages - len(system_messages)):]
-            
-            self.conversation_history = system_messages + recent_messages
-            self.logger.info(f"Conversation truncated to {len(self.conversation_history)} messages")
+    def truncate_conversation(self, max_messages: Optional[int] = None) -> None:
+        """Truncate conversation history to prevent context overflow while preserving task context"""
+        max_messages = max_messages or self.config.max_context_messages
+        
+        if len(self.conversation_history) <= max_messages:
+            return  # No truncation needed
+        
+        original_length = len(self.conversation_history)
+        
+        # Always preserve critical messages:
+        # 1. System message (index 0) - contains instructions and tools
+        # 2. Original task message (index 1) - contains the environment prompt/goal
+        critical_messages = []
+        
+        if len(self.conversation_history) >= 1:
+            critical_messages.append(self.conversation_history[0])  # System message
+        
+        if len(self.conversation_history) >= 2:
+            critical_messages.append(self.conversation_history[1])  # Original task
+        
+        # Calculate how many recent messages we can keep
+        available_slots = max_messages - len(critical_messages) - 1  # -1 for truncation notice
+        
+        if available_slots <= 0:
+            # If we can't fit any recent messages, at least keep the critical ones
+            recent_messages = []
+            available_slots = 0
+        else:
+            # Keep the most recent messages
+            recent_messages = self.conversation_history[-available_slots:]
+        
+        # Create truncation notice to inform the LLM
+        truncation_notice = {
+            "role": "system",
+            "content": f"[CONTEXT TRUNCATED] The conversation history has been truncated to manage context size. "
+                      f"Original conversation had {original_length} messages, now showing {len(critical_messages) + len(recent_messages) + 1} messages. "
+                      f"Your original task and recent {len(recent_messages)} messages are preserved. "
+                      f"Continue working on your assigned task."
+        }
+        
+        # Reconstruct conversation: critical messages + truncation notice + recent messages
+        self.conversation_history = critical_messages + [truncation_notice] + recent_messages
+        
+        self.logger.info(f"Conversation truncated from {original_length} to {len(self.conversation_history)} messages "
+                        f"(preserved {len(critical_messages)} critical + {len(recent_messages)} recent + 1 truncation notice)")
+    
+    def _truncate_output(self, output: str) -> str:
+        """Truncate long output to prevent context bloat"""
+        if len(output) > self.config.max_output_length:
+            truncated = output[:self.config.max_output_length]
+            truncated += f"\n... [truncated {len(output) - self.config.max_output_length} characters]"
+            return truncated
+        return output
+    
+    def _get_conversation_hash(self, messages: List[Dict[str, Any]]) -> str:
+        """Generate hash for conversation to enable caching"""
+        # Create a stable representation of the conversation
+        conversation_str = json.dumps(messages, sort_keys=True)
+        return hashlib.md5(conversation_str.encode()).hexdigest()
+    
+    def _estimate_tokens(self, text: str) -> int:
+        """Rough estimation of tokens (approximately 4 chars per token)"""
+        return len(text) // 4
+    
+    def _calculate_cost(self, input_tokens: int, output_tokens: int) -> float:
+        """Calculate approximate cost based on model and tokens"""
+        # Rough pricing estimates (per 1K tokens)
+        pricing = {
+            "gpt-4": {"input": 0.03, "output": 0.06},
+            "gpt-3.5-turbo": {"input": 0.001, "output": 0.002},
+            "claude-3-sonnet": {"input": 0.003, "output": 0.015},
+            "claude-3-opus": {"input": 0.015, "output": 0.075},
+            "anthropic/claude-3-sonnet": {"input": 0.003, "output": 0.015},
+            "anthropic/claude-3-opus": {"input": 0.015, "output": 0.075},
+            "anthropic/claude-4-sonnet": {"input": 0.003, "output": 0.015},
+            "anthropic/claude-sonnet-4": {"input": 0.003, "output": 0.015},
+        }
+        
+        # Default to GPT-4 pricing if model not found
+        model_pricing = pricing.get(self.config.model, pricing["gpt-4"])
+        
+        input_cost = (input_tokens / 1000) * model_pricing["input"]
+        output_cost = (output_tokens / 1000) * model_pricing["output"]
+        
+        return input_cost + output_cost
+    
+    def _update_token_usage(self, input_tokens: int, output_tokens: int) -> None:
+        """Update token usage statistics"""
+        if not self.config.track_token_usage:
+            return
+        
+        self.token_usage["total_input_tokens"] += input_tokens
+        self.token_usage["total_output_tokens"] += output_tokens
+        self.token_usage["api_calls"] += 1
+        
+        cost = self._calculate_cost(input_tokens, output_tokens)
+        self.token_usage["total_cost"] += cost
+        
+        # Warn if usage is high
+        if self.config.warn_high_usage:
+            if self.token_usage["total_cost"] > 10.0:  # $10 warning threshold
+                self.logger.warning(f"High token usage: ${self.token_usage['total_cost']:.2f}")
+        
+        # Check episode cost limit
+        if self.config.max_cost_per_episode:
+            if self.token_usage["total_cost"] > self.config.max_cost_per_episode:
+                raise RuntimeError(f"Episode cost limit exceeded: ${self.token_usage['total_cost']:.2f}")
+    
+    def get_token_usage_stats(self) -> Dict[str, Any]:
+        """Get token usage statistics"""
+        return {
+            **self.token_usage,
+            "cache_hits": self.cache_hits,
+            "cache_misses": self.cache_misses,
+            "cache_hit_rate": self.cache_hits / (self.cache_hits + self.cache_misses) if (self.cache_hits + self.cache_misses) > 0 else 0.0
+        }
+
+    async def add_tool_result(self, tool_call_id: str, tool_name: str, result: ActionResult) -> None:
+        """Add tool result to conversation history"""
+        # Format the result content
+        result_content = f"Success: {result.success}\n"
+        if result.output:
+            result_content += f"Output: {result.output}\n"
+        if result.error:
+            result_content += f"Error: {result.error}\n"
+        if hasattr(result, 'exit_code') and result.exit_code is not None:
+            result_content += f"Exit code: {result.exit_code}\n"
+        
+        # Add tool result to conversation
+        self.conversation_history.append({
+            "role": "tool",
+            "tool_call_id": tool_call_id,
+            "name": tool_name,
+            "content": result_content.strip()
+        })
+        
+        self.logger.debug(f"Added tool result for {tool_name}: {result.success}")
 
 
 class LLMAgentFactory:

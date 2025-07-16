@@ -104,7 +104,6 @@ class Environment:
                 working_dir=self.config.working_directory,
                 environment=self.config.environment_variables,
                 detach=True,
-                user="1000:1000",  # Non-root user for security
                 network_mode="bridge",
                 mem_limit="2g",  # Memory limit
                 cpu_count=2,  # CPU limit
@@ -204,7 +203,6 @@ class Environment:
                     f"/bin/sh -c '{command}'",
                     detach=True,
                     workdir=working_dir or self.config.working_directory,
-                    user="1000:1000",
                     environment=self.config.environment_variables
                 )
                 return ActionResult(
@@ -221,7 +219,6 @@ class Environment:
                 return self.container.exec_run(
                     f"/bin/sh -c '{command}'",
                     workdir=working_dir or self.config.working_directory,
-                    user="1000:1000",
                     environment=self.config.environment_variables,
                     stdout=True,
                     stderr=True,
@@ -297,6 +294,10 @@ class Environment:
             
             filepath, file_content = content.split(':', 1)
             
+            # Handle relative paths by prepending working directory
+            if not filepath.startswith('/'):
+                filepath = f"{self.config.working_directory}/{filepath}"
+            
             # Create a temporary file
             with tempfile.NamedTemporaryFile(mode='w', delete=False) as temp_file:
                 temp_file.write(file_content)
@@ -351,6 +352,10 @@ class Environment:
                     duration=time.time() - start_time,
                     timestamp=datetime.now().isoformat()
                 )
+            
+            # Handle relative paths by prepending working directory
+            if not filepath.startswith('/'):
+                filepath = f"{self.config.working_directory}/{filepath}"
             
             # Get file from container
             archive_data, _ = self.container.get_archive(filepath)
@@ -408,7 +413,6 @@ class Environment:
                 exec_result = self.container.exec_run(
                     test_command,
                     workdir=self.config.working_directory,
-                    user="1000:1000",
                     environment=self.config.environment_variables,
                     stdout=True,
                     stderr=True,

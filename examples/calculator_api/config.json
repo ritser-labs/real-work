@@ -2,14 +2,14 @@
   "environments": [
     {
       "id": "calculator_api",
-      "docker_image": "python:3.9-slim",
+      "docker_image": "python:3.9",
       "init_commands": [
-        "pip install --user flask pytest requests"
+        "pip install flask pytest requests"
       ],
       "unit_tests": [
-        "sh -c 'PYTHONPATH=/tmp python -m pytest /tmp/tests/test_app.py -v'"
+        "sh -c 'cd /tmp && PYTHONPATH=/tmp python -m pytest /tmp/tests/test_app.py -v'"
       ],
-      "prompt": "Create a Flask calculator API with a single `/calculate` endpoint that accepts POST requests with JSON body: {\"operation\": \"add|subtract|multiply|divide\", \"numbers\": [1, 2, 3]}. Also add a `/health` endpoint that returns {\"status\": \"ok\"}. The requirements are in the test file `tests/test_app.py`. Your task is to:\n1. Write the Flask application code to a file named `app/__init__.py` (not app.py).\n2. Ensure the Flask app instance is named `app` and is importable as `from app import app`.\n3. Handle division by zero by returning a 400 status code with an error message.\n4. Run the Flask application as a background task using the `background` flag.",
+      "prompt": "Create a Flask calculator API with a single `/calculate` endpoint that accepts POST requests with JSON body: {\"operation\": \"add|subtract|multiply|divide\", \"numbers\": [1, 2, 3]}. Also add a `/health` endpoint that returns {\"status\": \"ok\"}. \n\nIMPORTANT: You are working in /tmp directory. All file paths should be relative to /tmp.\n\nYour task is to:\n1. First, run 'ls -la /tmp' to see what files are available\n2. Read the test file at '/tmp/tests/test_app.py' to understand what needs to be implemented\n3. Create the Flask app at '/tmp/app.py' (not in a subdirectory)\n4. Test the API by running 'python /tmp/app.py' in the background\n5. Test the endpoints using Python requests instead of curl\n6. Mark the task as done when everything works\n\nAvailable commands: ls, cat, python. Use absolute paths starting with /tmp/. For testing HTTP endpoints, use Python requests instead of curl.",
       "working_directory": "/tmp",
       "environment_variables": {
         "PYTHONPATH": "/tmp",
@@ -39,6 +39,13 @@
     "command_timeout": 30,
     "test_timeout": 120
   },
-  "template_prompt": "You are an expert software engineer working in a Docker container environment. You have access to shell commands, can read and write files, and should implement the requested functionality step by step.\n\nYour environment has:\n- Shell access with common Unix tools\n- Python 3.9 with pip for package management\n- Access to install packages as needed\n- Working directory at /tmp\n\nAlways:\n1. Think through the problem step by step\n2. Implement clean, well-structured code\n3. Test your implementation as you go\n4. Handle errors gracefully\n5. Use proper logging and documentation\n\nWhen writing a file, provide only the raw code content. Do not include any markdown formatting like ` ```python `.\nWhen you complete the task, use <done> to indicate completion.",
-  "plugins": []
+  "template_prompt": "You are an expert software engineer working in a Docker container environment. You have access to shell commands, can read and write files, and should implement the requested functionality step by step.\n\nYour environment has:\n- Shell access with common Unix tools\n- Python 3.9 with pip for package management\n- Access to install packages as needed\n- Working directory at /tmp\n\nIMPORTANT: When reading or writing files, use relative paths (e.g., 'app.py' not '/tmp/app.py').\n\nAlways:\n1. Think through the problem step by step\n2. Implement clean, well-structured code\n3. Test your implementation as you go\n4. Handle errors gracefully\n5. Use proper logging and documentation\n\nWhen writing a file, provide only the raw code content. Do not include any markdown formatting like ` ```python `.\nWhen you complete the task, use <done> to indicate completion.",
+  "plugins": [],
+  "llm_model": "anthropic/claude-sonnet-4",
+  "max_episodes": 3,
+  "stop_on_success": false,
+  "max_parallel_rollouts": 2,
+  "global_timeout": 1800,
+  "output_path": "trajectories",
+  "plugins_enabled": true
 } 

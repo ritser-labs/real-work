@@ -297,14 +297,6 @@ The framework provides comprehensive performance monitoring:
 - **Action efficiency metrics**
 - **Plugin performance statistics**
 
-## Security Considerations
-
-- Environments run with non-root user (`1000:1000`)
-- Memory and CPU limits on Docker containers
-- SafetyFilterPlugin blocks dangerous commands
-- Network isolation for containers
-- Configurable command timeouts
-
 ## Extending the Framework
 
 ### Adding New Action Types

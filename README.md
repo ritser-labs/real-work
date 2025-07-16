@@ -69,13 +69,32 @@ Or set it directly in the configuration file.
         "PYTHONPATH": "/tmp",
         "HOME": "/tmp",
         "PATH": "/tmp/.local/bin:/usr/local/bin:/usr/bin:/bin"
-      }
+      },
+      "copy_folders": [],
+      "max_retries": 3
     }
   ],
   "rollout_config": {
     "max_parallel_rollouts": 4,
-    "trajectory_output_path": "trajectories"
-  }
+    "trajectory_output_path": "trajectories",
+    "enable_plugins": true,
+    "save_trajectory_interval": 10,
+    "state_persistence_enabled": true
+  },
+  "episode_control_config": {
+    "max_episodes": 1,
+    "max_episodes_per_env": null,
+    "stop_on_success": false,
+    "min_success_rate": null,
+    "safety_limit": 100
+  },
+  "timeout_config": {
+    "global_timeout": 1800,
+    "command_timeout": 300,
+    "test_timeout": 120
+  },
+  "template_prompt": "You are an expert software engineer working in a Docker container environment. You have access to shell commands, can read and write files, and should implement the requested functionality step by step.",
+  "plugins": []
 }
 ```
 
@@ -127,6 +146,13 @@ The framework supports several types of plugins:
 
 ## Configuration
 
+**Required Fields**: The following fields are required in your configuration file:
+- `environments` - List of environment configurations
+- `rollout_config` - Rollout execution settings
+- `episode_control_config` - Episode control settings
+- `timeout_config` - Global timeout settings
+- `template_prompt` - Base prompt template
+
 ### Environment Configuration
 
 ```json
@@ -140,22 +166,40 @@ The framework supports several types of plugins:
   "environment_variables": {
     "PYTHONPATH": "/workspace"
   },
-  "timeout_config": {
-    "global_timeout": 1800,
-    "command_timeout": 300
-  }
+  "copy_folders": [],
+  "max_retries": 3
 }
 ```
 
 ### LLM Configuration
 
+**Note**: LLM configuration is typically provided via command-line arguments rather than in the JSON file. The framework supports the following CLI options:
+
+```bash
+--llm-model anthropic/claude-sonnet-4
+--llm-api-key your-api-key-here
+--llm-base-url https://openrouter.ai/api/v1
+--llm-temperature 0.7
+--llm-max-tokens 4096
+--llm-timeout 60
+```
+
+For advanced LLM configuration, you can also specify:
+
 ```json
 {
-  "model": "gpt-4",
+  "model": "anthropic/claude-sonnet-4",
   "api_key": "your-api-key",
-  "base_url": "https://api.openai.com/v1",
+  "base_url": "https://openrouter.ai/api/v1",
   "temperature": 0.7,
-  "max_tokens": 4096
+  "max_tokens": 4096,
+  "timeout": 60,
+  "enable_caching": true,
+  "cache_size": 100,
+  "max_context_messages": 50,
+  "max_output_length": 2000,
+  "track_token_usage": true,
+  "warn_high_usage": true
 }
 ```
 
@@ -168,6 +212,28 @@ The framework supports several types of plugins:
   "enable_plugins": true,
   "save_trajectory_interval": 10,
   "state_persistence_enabled": true
+}
+```
+
+### Episode Control Configuration
+
+```json
+{
+  "max_episodes": 1,
+  "max_episodes_per_env": null,
+  "stop_on_success": false,
+  "min_success_rate": null,
+  "safety_limit": 100
+}
+```
+
+### Timeout Configuration
+
+```json
+{
+  "global_timeout": 1800,
+  "command_timeout": 300,
+  "test_timeout": 120
 }
 ```
 
@@ -325,6 +391,8 @@ Validate your configuration without running:
 ```bash
 uv run python main.py config.json --dry-run
 ```
+
+**Note**: Some fields like `llm_model`, `max_episodes`, `stop_on_success`, `max_parallel_rollouts`, `global_timeout`, `output_path`, and `plugins_enabled` at the root level are deprecated and should be moved to their respective configuration sections (`llm_config`, `episode_control_config`, `rollout_config`, `timeout_config`).
 
 ## Contributing
 
